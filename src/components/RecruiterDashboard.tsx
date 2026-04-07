@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, Company, Job, Application } from '../lib/supabase';
 import { Building2, Briefcase, LogOut, Users, Plus, X } from 'lucide-react';
+import { DashboardProfileButton } from './DashboardProfileButton';
 
 export function RecruiterDashboard() {
   const { profile, signOut } = useAuth();
@@ -30,10 +31,12 @@ export function RecruiterDashboard() {
   });
 
   useEffect(() => {
+    if (!profile?.id) return;
+
     loadCompany();
     loadJobs();
     loadApplications();
-  }, []);
+  }, [profile?.id]);
 
   const loadCompany = async () => {
     const { data } = await supabase
@@ -65,6 +68,11 @@ export function RecruiterDashboard() {
   };
 
   const loadApplications = async () => {
+    if (jobs.length === 0) {
+      setApplications([]);
+      return;
+    }
+
     const { data } = await supabase
       .from('applications')
       .select(`
@@ -82,10 +90,14 @@ export function RecruiterDashboard() {
   };
 
   useEffect(() => {
-    if (jobs.length > 0) {
+    if (profile?.id && jobs.length > 0) {
       loadApplications();
     }
-  }, [jobs.length]);
+
+    if (profile?.id && jobs.length === 0) {
+      setApplications([]);
+    }
+  }, [jobs.length, profile?.id]);
 
   const handleSaveCompany = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,7 +194,12 @@ export function RecruiterDashboard() {
               <h1 className="text-xl font-bold text-gray-900">JobPortal - Recruiter</h1>
             </div>
             <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-600">{profile?.full_name}</span>
+      
+              <DashboardProfileButton
+                profile={profile}
+                accentColorClass="text-blue-600"
+                companyName={company?.name}
+              />
               <button
                 onClick={() => signOut()}
                 className="flex items-center text-gray-600 hover:text-gray-900"
@@ -479,21 +496,51 @@ export function RecruiterDashboard() {
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                        {app.job_seeker?.full_name}
+                        {app.applicant_name || app.job_seeker?.full_name}
                       </h3>
                       <p className="text-gray-600 mb-2">Applied for: {app.job?.title}</p>
+                      <p className="text-sm text-gray-600 mb-1">
+                        Email: {app.applicant_email || app.job_seeker?.email || 'Not provided'}
+                      </p>
                       <p className="text-sm text-gray-500 mb-3">
                         {new Date(app.applied_at).toLocaleDateString()}
                       </p>
-                      {app.job_seeker?.job_seeker_profile?.skills && (
+                      {(app.applicant_skills?.length || app.job_seeker?.job_seeker_profile?.skills?.length) && (
                         <div className="flex flex-wrap gap-2 mb-3">
-                          {app.job_seeker.job_seeker_profile.skills.map((skill: string, idx: number) => (
+                          {(app.applicant_skills?.length
+                            ? app.applicant_skills
+                            : app.job_seeker?.job_seeker_profile?.skills || []).map((skill: string, idx: number) => (
                             <span key={idx} className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-sm">
                               {skill}
                             </span>
                           ))}
                         </div>
                       )}
+                      <div className="space-y-2 mb-3 text-sm text-gray-700">
+                        <p>
+                          <span className="font-medium text-gray-900">Reference option:</span>{' '}
+                          {app.reference_option === 'contact_details_provided'
+                            ? 'Contact details provided'
+                            : app.reference_option === 'attached_in_resume'
+                              ? 'Attached in resume'
+                              : 'Available on request'}
+                        </p>
+                        {app.reference_details && (
+                          <p>
+                            <span className="font-medium text-gray-900">Reference details:</span>{' '}
+                            {app.reference_details}
+                          </p>
+                        )}
+                        {app.resume_data_url && (
+                          <a
+                            href={app.resume_data_url}
+                            download={app.resume_file_name || `${app.applicant_name || 'candidate'}-resume`}
+                            className="inline-flex items-center rounded-lg bg-gray-100 px-3 py-2 font-medium text-gray-800 transition hover:bg-gray-200"
+                          >
+                            Download Resume
+                          </a>
+                        )}
+                      </div>
                       <span className={`inline-block px-3 py-1 rounded-full text-sm ${
                         app.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
                         app.status === 'accepted' ? 'bg-green-100 text-green-700' :

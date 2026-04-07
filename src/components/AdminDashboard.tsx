@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, UserProfile, Job } from '../lib/supabase';
 import { Shield, Users, Briefcase, LogOut, BarChart3 } from 'lucide-react';
+import { DashboardProfileButton } from './DashboardProfileButton';
 
 export function AdminDashboard() {
   const { profile, signOut } = useAuth();
@@ -103,7 +104,8 @@ export function AdminDashboard() {
               <h1 className="text-xl font-bold text-gray-900">Admin Dashboard</h1>
             </div>
             <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-600">{profile?.full_name}</span>
+              
+              <DashboardProfileButton profile={profile} accentColorClass="text-red-600" />
               <button
                 onClick={() => signOut()}
                 className="flex items-center text-gray-600 hover:text-gray-900"
@@ -153,41 +155,41 @@ export function AdminDashboard() {
         </div>
 
         {activeTab === 'analytics' && (
-          <div className="grid grid-cols-3 gap-6 mb-8">
-            <div className="bg-white rounded-lg shadow-sm p-6">
-              <div className="flex items-center justify-between">
+          <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded-lg bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-sm text-gray-600 mb-1">Total Users</p>
                   <p className="text-3xl font-bold text-gray-900">{stats.totalUsers}</p>
                 </div>
-                <Users className="w-12 h-12 text-blue-500" />
+                <Users className="h-10 w-10 shrink-0 text-blue-500 sm:h-12 sm:w-12" />
               </div>
-              <div className="mt-4 flex gap-4 text-sm">
+              <div className="mt-4 flex flex-col gap-1 text-sm sm:flex-row sm:flex-wrap sm:gap-4">
                 <span className="text-gray-600">Job Seekers: {stats.jobSeekers}</span>
                 <span className="text-gray-600">Recruiters: {stats.recruiters}</span>
               </div>
             </div>
 
-            <div className="bg-white rounded-lg shadow-sm p-6">
-              <div className="flex items-center justify-between">
+            <div className="rounded-lg bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-sm text-gray-600 mb-1">Total Jobs</p>
                   <p className="text-3xl font-bold text-gray-900">{stats.totalJobs}</p>
                 </div>
-                <Briefcase className="w-12 h-12 text-green-500" />
+                <Briefcase className="h-10 w-10 shrink-0 text-green-500 sm:h-12 sm:w-12" />
               </div>
               <div className="mt-4 text-sm">
                 <span className="text-gray-600">Active: {stats.activeJobs}</span>
               </div>
             </div>
 
-            <div className="bg-white rounded-lg shadow-sm p-6">
-              <div className="flex items-center justify-between">
+            <div className="rounded-lg bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-sm text-gray-600 mb-1">Total Applications</p>
                   <p className="text-3xl font-bold text-gray-900">{stats.totalApplications}</p>
                 </div>
-                <BarChart3 className="w-12 h-12 text-purple-500" />
+                <BarChart3 className="h-10 w-10 shrink-0 text-purple-500 sm:h-12 sm:w-12" />
               </div>
             </div>
           </div>

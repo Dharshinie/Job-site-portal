@@ -27,6 +27,16 @@ export interface JobSeekerProfile {
   bio: string;
 }
 
+export interface ApplicationProfileDetails {
+  applicant_name: string;
+  applicant_email: string;
+  applicant_skills: string[];
+  resume_file_name: string;
+  resume_data_url: string;
+  reference_option: 'available_on_request' | 'attached_in_resume' | 'contact_details_provided';
+  reference_details: string;
+}
+
 export interface Company {
   id: string;
   recruiter_id: string;
@@ -60,6 +70,13 @@ export interface Application {
   status: 'pending' | 'accepted' | 'rejected';
   cover_letter: string;
   applied_at: string;
+  applicant_name: string;
+  applicant_email: string;
+  applicant_skills: string[];
+  resume_file_name: string;
+  resume_data_url: string;
+  reference_option: 'available_on_request' | 'attached_in_resume' | 'contact_details_provided';
+  reference_details: string;
   job?: Job;
   job_seeker?: UserProfile & { job_seeker_profile?: JobSeekerProfile };
 }

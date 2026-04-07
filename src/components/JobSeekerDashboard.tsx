@@ -1,16 +1,123 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, Job, Application } from '../lib/supabase';
-import { Search, Briefcase, LogOut, User, FileText, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { supabase, Job, Application, JobSeekerProfile } from '../lib/supabase';
+import { Search, Briefcase, LogOut, FileText, CheckCircle, XCircle, Clock, ArrowLeft, Upload, X } from 'lucide-react';
+import { DashboardProfileButton } from './DashboardProfileButton';
+
+const SKILL_KEYWORDS = [
+  { label: 'JavaScript', aliases: ['javascript', 'js'] },
+  { label: 'TypeScript', aliases: ['typescript', 'ts'] },
+  { label: 'React', aliases: ['react', 'react.js', 'reactjs'] },
+  { label: 'Node.js', aliases: ['node', 'node.js', 'nodejs'] },
+  { label: 'Express', aliases: ['express', 'express.js', 'expressjs'] },
+  { label: 'Next.js', aliases: ['next', 'next.js', 'nextjs'] },
+  { label: 'HTML', aliases: ['html', 'html5'] },
+  { label: 'CSS', aliases: ['css', 'css3'] },
+  { label: 'Tailwind CSS', aliases: ['tailwind', 'tailwindcss', 'tailwind css'] },
+  { label: 'Python', aliases: ['python'] },
+  { label: 'Java', aliases: ['java'] },
+  { label: 'C++', aliases: ['c++', 'cpp'] },
+  { label: 'C#', aliases: ['c#', 'csharp'] },
+  { label: 'SQL', aliases: ['sql', 'mysql', 'postgresql', 'postgres', 'sqlite'] },
+  { label: 'MongoDB', aliases: ['mongodb', 'mongo db', 'mongo'] },
+  { label: 'Firebase', aliases: ['firebase'] },
+  { label: 'Supabase', aliases: ['supabase'] },
+  { label: 'Git', aliases: ['git', 'github', 'gitlab'] },
+  { label: 'REST APIs', aliases: ['rest api', 'restful api', 'api integration', 'apis'] },
+  { label: 'GraphQL', aliases: ['graphql'] },
+  { label: 'Docker', aliases: ['docker', 'containerization', 'containers'] },
+  { label: 'Kubernetes', aliases: ['kubernetes', 'k8s'] },
+  { label: 'AWS', aliases: ['aws', 'amazon web services'] },
+  { label: 'Azure', aliases: ['azure'] },
+  { label: 'GCP', aliases: ['gcp', 'google cloud'] },
+  { label: 'Figma', aliases: ['figma'] },
+  { label: 'UI/UX Design', aliases: ['ui/ux', 'ux design', 'ui design', 'user experience'] },
+  { label: 'Testing', aliases: ['testing', 'jest', 'vitest', 'cypress', 'playwright'] },
+  { label: 'Agile', aliases: ['agile', 'scrum'] },
+  { label: 'Communication', aliases: ['communication', 'stakeholder management'] },
+  { label: 'Problem Solving', aliases: ['problem solving', 'analytical thinking'] },
+];
+
+type SkillInsight = {
+  requiredSkills: string[];
+  matchedSkills: string[];
+  missingSkills: string[];
+  matchPercentage: number;
+};
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeSkill = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^\w#+.\s/-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const dedupeSkills = (skills: string[]) => Array.from(new Set(skills));
+
+const extractSkillsFromText = (text: string) => {
+  const normalizedText = normalizeSkill(text);
+
+  return SKILL_KEYWORDS.filter(({ aliases }) =>
+    aliases.some((alias) => new RegExp(`(^|\\b)${escapeRegExp(normalizeSkill(alias))}(\\b|$)`, 'i').test(normalizedText))
+  ).map(({ label }) => label);
+};
+
+const buildSkillInsight = (job: Job, userSkills: string[]): SkillInsight => {
+  const requiredSkills = dedupeSkills(
+    extractSkillsFromText(`${job.title} ${job.description || ''} ${job.requirements || ''}`)
+  );
+
+  if (requiredSkills.length === 0) {
+    return {
+      requiredSkills: [],
+      matchedSkills: [],
+      missingSkills: [],
+      matchPercentage: 0,
+    };
+  }
+
+  const normalizedUserSkills = new Set(
+    userSkills.flatMap((skill) => {
+      const normalized = normalizeSkill(skill);
+      const canonicalMatch = SKILL_KEYWORDS.find(({ label, aliases }) =>
+        [label, ...aliases].some((item) => normalizeSkill(item) === normalized)
+      );
+
+      return canonicalMatch ? [canonicalMatch.label] : [skill.trim()];
+    })
+  );
+
+  const matchedSkills = requiredSkills.filter((skill) => normalizedUserSkills.has(skill));
+  const missingSkills = requiredSkills.filter((skill) => !normalizedUserSkills.has(skill));
+  const matchPercentage = Math.round((matchedSkills.length / requiredSkills.length) * 100);
+
+  return {
+    requiredSkills,
+    matchedSkills,
+    missingSkills,
+    matchPercentage,
+  };
+};
 
 export function JobSeekerDashboard() {
   const { profile, signOut } = useAuth();
-  const [activeTab, setActiveTab] = useState<'search' | 'profile' | 'applications'>('search');
+  const [activeTab, setActiveTab] = useState<'search' | 'applications'>('search');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [applicationJob, setApplicationJob] = useState<Job | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [jobTypeFilter, setJobTypeFilter] = useState<'all' | Job['job_type']>('all');
+  const [locationFilter, setLocationFilter] = useState('all');
+  const [applicationFilter, setApplicationFilter] = useState<'all' | 'applied' | 'not_applied'>('all');
   const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [jobSeekerProfile, setJobSeekerProfile] = useState<JobSeekerProfile | null>(null);
+  const [applicationSuccessMessage, setApplicationSuccessMessage] = useState('');
+  const [applicationErrorMessage, setApplicationErrorMessage] = useState('');
+  const [showProfileEditor, setShowProfileEditor] = useState(false);
 
   const [profileForm, setProfileForm] = useState({
     skills: '',
@@ -20,11 +127,24 @@ export function JobSeekerDashboard() {
     bio: '',
   });
 
+  const [applicationForm, setApplicationForm] = useState({
+    applicantName: '',
+    applicantEmail: '',
+    skills: [] as string[],
+    resumeFileName: '',
+    resumeDataUrl: '',
+    referenceOption: 'available_on_request' as const,
+    referenceDetails: '',
+  });
+  const [skillInput, setSkillInput] = useState('');
+
   useEffect(() => {
+    if (!profile?.id) return;
+
     loadJobs();
     loadApplications();
     loadProfile();
-  }, []);
+  }, [profile?.id]);
 
   const loadJobs = async () => {
     const { data } = await supabase
@@ -54,6 +174,7 @@ export function JobSeekerDashboard() {
       .maybeSingle();
 
     if (data) {
+      setJobSeekerProfile(data);
       setProfileForm({
         skills: data.skills?.join(', ') || '',
         experience: data.experience || '',
@@ -61,8 +182,32 @@ export function JobSeekerDashboard() {
         location: data.location || '',
         bio: data.bio || '',
       });
+      setApplicationForm((current) => ({
+        ...current,
+        applicantName: profile?.full_name || current.applicantName,
+        applicantEmail: profile?.email || current.applicantEmail,
+        skills: data.skills || [],
+        resumeDataUrl: data.resume_url || current.resumeDataUrl,
+        resumeFileName: current.resumeFileName,
+      }));
+    } else {
+      setJobSeekerProfile(null);
+      setApplicationForm((current) => ({
+        ...current,
+        applicantName: profile?.full_name || current.applicantName,
+        applicantEmail: profile?.email || current.applicantEmail,
+      }));
     }
   };
+
+  const isProfileComplete =
+    !!jobSeekerProfile &&
+    Boolean(
+      jobSeekerProfile.skills?.length &&
+      jobSeekerProfile.phone?.trim() &&
+      jobSeekerProfile.location?.trim() &&
+      jobSeekerProfile.bio?.trim()
+    );
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,6 +228,7 @@ export function JobSeekerDashboard() {
       .eq('user_id', profile?.id);
 
     if (!error) {
+      setShowProfileEditor(false);
       loadProfile();
     }
 
@@ -90,39 +236,158 @@ export function JobSeekerDashboard() {
   };
 
   const handleApply = async (jobId: string) => {
-    const { error } = await supabase
-      .from('applications')
-      .insert({
-        job_id: jobId,
-        job_seeker_id: profile?.id,
-        status: 'pending',
-      });
-
-    if (!error) {
-      loadApplications();
-      loadJobs();
+    if (!isProfileComplete) {
+      setApplicationSuccessMessage('');
+      setApplicationErrorMessage('Complete your profile from the profile icon before applying for jobs.');
+      setShowProfileEditor(true);
+      return;
     }
+
+    const job = jobs.find((item) => item.id === jobId) || selectedJob;
+    if (!job) return;
+
+    setApplicationSuccessMessage('');
+    setApplicationErrorMessage('');
+    setSelectedJob(null);
+    setApplicationJob(job);
+    setApplicationForm((current) => ({
+      ...current,
+      applicantName: profile?.full_name || '',
+      applicantEmail: profile?.email || '',
+      skills: profileForm.skills.split(',').map((skill) => skill.trim()).filter(Boolean),
+      resumeDataUrl: jobSeekerProfile?.resume_url || current.resumeDataUrl,
+      resumeFileName: current.resumeFileName,
+    }));
   };
 
-  const filteredJobs = jobs.filter(job =>
-    job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    job.company?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    job.location.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const addSkillChip = () => {
+    const nextSkill = skillInput.trim();
+    if (!nextSkill) return;
+
+    setApplicationForm((current) => ({
+      ...current,
+      skills: current.skills.includes(nextSkill) ? current.skills : [...current.skills, nextSkill],
+    }));
+    setSkillInput('');
+  };
+
+  const removeSkillChip = (skillToRemove: string) => {
+    setApplicationForm((current) => ({
+      ...current,
+      skills: current.skills.filter((skill) => skill !== skillToRemove),
+    }));
+  };
+
+  const handleResumeUpload = async (file: File | null) => {
+    if (!file) return;
+
+    const fileToDataUrl = () =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => reject(new Error('Unable to read resume file'));
+        reader.readAsDataURL(file);
+      });
+
+    const resumeDataUrl = await fileToDataUrl();
+
+    setApplicationForm((current) => ({
+      ...current,
+      resumeFileName: file.name,
+      resumeDataUrl,
+    }));
+  };
+
+  const handleSubmitApplication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!applicationJob || !profile?.id) return;
+
+    setApplying(true);
+    setApplicationSuccessMessage('');
+    setApplicationErrorMessage('');
+    const skillsArray = applicationForm.skills;
+
+    const { error } = await supabase.from('applications').insert({
+      job_id: applicationJob.id,
+      job_seeker_id: profile.id,
+      status: 'pending',
+      applicant_name: applicationForm.applicantName,
+      applicant_email: applicationForm.applicantEmail,
+      applicant_skills: skillsArray,
+      resume_file_name: applicationForm.resumeFileName,
+      resume_data_url: applicationForm.resumeDataUrl,
+      reference_option: applicationForm.referenceOption,
+      reference_details: applicationForm.referenceDetails,
+    });
+
+    if (!error) {
+      const { error: profileUpdateError } = await supabase
+        .from('job_seeker_profiles')
+        .update({
+          skills: skillsArray,
+          resume_url: applicationForm.resumeDataUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', profile.id);
+
+      if (profileUpdateError) {
+        setApplicationErrorMessage(profileUpdateError.message);
+        setApplying(false);
+        return;
+      }
+
+      setApplicationJob(null);
+      setSelectedJob(null);
+      setActiveTab('applications');
+      setApplicationSuccessMessage(
+        `Application submitted successfully for ${applicationJob.title}. The recruiter for ${applicationJob.company?.name || 'this company'} can now view your submitted details.`
+      );
+      loadApplications();
+      loadProfile();
+    } else {
+      setApplicationErrorMessage(error.message);
+    }
+
+    setApplying(false);
+  };
 
   const hasApplied = (jobId: string) => applications.some(app => app.job_id === jobId);
+  const profileSkills = jobSeekerProfile?.skills || profileForm.skills.split(',').map((skill) => skill.trim()).filter(Boolean);
+  const getSkillInsight = (job: Job) => buildSkillInsight(job, profileSkills);
+  const locations = Array.from(new Set(jobs.map((job) => job.location).filter(Boolean))).sort();
+  const filteredJobs = jobs.filter((job) => {
+    const matchesSearch =
+      job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      job.company?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      job.location.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesJobType = jobTypeFilter === 'all' || job.job_type === jobTypeFilter;
+    const matchesLocation = locationFilter === 'all' || job.location === locationFilter;
+    const isApplied = hasApplied(job.id);
+    const matchesApplication =
+      applicationFilter === 'all' ||
+      (applicationFilter === 'applied' && isApplied) ||
+      (applicationFilter === 'not_applied' && !isApplied);
+
+    return matchesSearch && matchesJobType && matchesLocation && matchesApplication;
+  });
 
   return (
     <div className="min-h-screen bg-gray-50">
       <nav className="bg-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex min-h-16 flex-col gap-3 py-4 sm:h-16 sm:flex-row sm:items-center sm:justify-between sm:py-0">
             <div className="flex items-center">
               <Briefcase className="w-8 h-8 text-blue-600 mr-2" />
               <h1 className="text-xl font-bold text-gray-900">JobPortal</h1>
             </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-600">{profile?.full_name}</span>
+            <div className="flex items-center justify-end gap-3 sm:gap-4">
+              
+              <DashboardProfileButton
+                profile={profile}
+                accentColorClass="text-blue-600"
+                extraProfile={jobSeekerProfile}
+                onEdit={() => setShowProfileEditor(true)}
+              />
               <button
                 onClick={() => signOut()}
                 className="flex items-center text-gray-600 hover:text-gray-900"
@@ -135,10 +400,22 @@ export function JobSeekerDashboard() {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex space-x-1 mb-8 bg-white rounded-lg p-1 shadow-sm">
+        {applicationSuccessMessage && (
+          <div className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-800">
+            {applicationSuccessMessage}
+          </div>
+        )}
+
+        {applicationErrorMessage && (
+          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+            {applicationErrorMessage}
+          </div>
+        )}
+
+        <div className="mb-8 flex flex-col gap-1 rounded-lg bg-white p-1 shadow-sm sm:flex-row">
           <button
             onClick={() => setActiveTab('search')}
-            className={`flex-1 flex items-center justify-center py-2 px-4 rounded-md transition ${
+            className={`flex-1 flex items-center justify-center rounded-md py-2 px-4 transition ${
               activeTab === 'search'
                 ? 'bg-blue-600 text-white'
                 : 'text-gray-600 hover:bg-gray-100'
@@ -148,19 +425,8 @@ export function JobSeekerDashboard() {
             Search Jobs
           </button>
           <button
-            onClick={() => setActiveTab('profile')}
-            className={`flex-1 flex items-center justify-center py-2 px-4 rounded-md transition ${
-              activeTab === 'profile'
-                ? 'bg-blue-600 text-white'
-                : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            <User className="w-5 h-5 mr-2" />
-            My Profile
-          </button>
-          <button
             onClick={() => setActiveTab('applications')}
-            className={`flex-1 flex items-center justify-center py-2 px-4 rounded-md transition ${
+            className={`flex-1 flex items-center justify-center rounded-md py-2 px-4 transition ${
               activeTab === 'applications'
                 ? 'bg-blue-600 text-white'
                 : 'text-gray-600 hover:bg-gray-100'
@@ -173,23 +439,65 @@ export function JobSeekerDashboard() {
 
         {activeTab === 'search' && (
           <div>
-            <div className="mb-6">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-                <input
-                  type="text"
-                  placeholder="Search by job title, company, or location..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+            <div className="mb-6 rounded-2xl bg-white p-4 shadow-sm sm:p-5">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                  <input
+                    type="text"
+                    placeholder="Search by job title, company, or location..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 py-3 pl-10 pr-4 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <select
+                  value={jobTypeFilter}
+                  onChange={(e) => setJobTypeFilter(e.target.value as typeof jobTypeFilter)}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All job types</option>
+                  <option value="full-time">Full-time</option>
+                  <option value="part-time">Part-time</option>
+                  <option value="contract">Contract</option>
+                  <option value="internship">Internship</option>
+                </select>
+                <select
+                  value={locationFilter}
+                  onChange={(e) => setLocationFilter(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All locations</option>
+                  {locations.map((location) => (
+                    <option key={location} value={location}>
+                      {location}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={applicationFilter}
+                  onChange={(e) => setApplicationFilter(e.target.value as typeof applicationFilter)}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All jobs</option>
+                  <option value="not_applied">Not applied</option>
+                  <option value="applied">Applied</option>
+                </select>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-sm text-gray-500">
+                <span>{filteredJobs.length} jobs found</span>
+                {!isProfileComplete && <span>Complete your profile from the profile icon to apply.</span>}
+                {!!profileSkills.length && <span>Skill gap suggestions are based on your saved profile skills.</span>}
               </div>
             </div>
 
             <div className="grid gap-4">
-              {filteredJobs.map((job) => (
-                <div key={job.id} className="bg-white rounded-lg shadow-sm p-6 hover:shadow-md transition">
-                  <div className="flex justify-between items-start gap-4">
+              {filteredJobs.map((job) => {
+                const skillInsight = getSkillInsight(job);
+
+                return (
+                <div key={job.id} className="rounded-lg bg-white p-5 shadow-sm transition hover:shadow-md sm:p-6">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="flex-1">
                       <h3 className="text-xl font-semibold text-gray-900 mb-2">{job.title}</h3>
                       <p className="text-gray-600 mb-2">{job.company?.name}</p>
@@ -207,11 +515,47 @@ export function JobSeekerDashboard() {
                         )}
                       </div>
                       <p className="text-gray-700 mb-4 line-clamp-3">{job.description}</p>
+                      {skillInsight.requiredSkills.length > 0 && (
+                        <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-blue-900">
+                              Skill match: {skillInsight.matchPercentage}%
+                            </span>
+                            <span className="text-sm text-blue-700">
+                              {skillInsight.matchedSkills.length}/{skillInsight.requiredSkills.length} identified skills matched
+                            </span>
+                          </div>
+                          {!!skillInsight.matchedSkills.length && (
+                            <div className="mt-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-green-700">Matched skills</p>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {skillInsight.matchedSkills.map((skill) => (
+                                  <span key={skill} className="rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+                                    {skill}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {!!skillInsight.missingSkills.length && (
+                            <div className="mt-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Skill gap suggestions</p>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {skillInsight.missingSkills.slice(0, 6).map((skill) => (
+                                  <span key={skill} className="rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-700">
+                                    Learn {skill}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row lg:min-w-[220px] lg:flex-col">
                       <button
                         onClick={() => setSelectedJob(job)}
-                        className="px-6 py-2 rounded-lg font-medium border border-blue-600 text-blue-600 hover:bg-blue-50 transition"
+                        className="w-full rounded-lg border border-blue-600 px-6 py-2 font-medium text-blue-600 transition hover:bg-blue-50"
                       >
                         View Details
                       </button>
@@ -229,91 +573,11 @@ export function JobSeekerDashboard() {
                     </div>
                   </div>
                 </div>
-              ))}
+              )})}
               {filteredJobs.length === 0 && (
                 <p className="text-center text-gray-500 py-8">No jobs found for your search.</p>
               )}
             </div>
-          </div>
-        )}
-
-        {activeTab === 'profile' && (
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <h2 className="text-2xl font-bold mb-6">My Profile</h2>
-            <form onSubmit={handleUpdateProfile} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Skills (comma separated)
-                </label>
-                <input
-                  type="text"
-                  value={profileForm.skills}
-                  onChange={(e) => setProfileForm({ ...profileForm, skills: e.target.value })}
-                  placeholder="e.g., JavaScript, React, Node.js"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Experience
-                </label>
-                <textarea
-                  value={profileForm.experience}
-                  onChange={(e) => setProfileForm({ ...profileForm, experience: e.target.value })}
-                  placeholder="Describe your work experience..."
-                  rows={4}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Phone
-                  </label>
-                  <input
-                    type="tel"
-                    value={profileForm.phone}
-                    onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Location
-                  </label>
-                  <input
-                    type="text"
-                    value={profileForm.location}
-                    onChange={(e) => setProfileForm({ ...profileForm, location: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Bio
-                </label>
-                <textarea
-                  value={profileForm.bio}
-                  onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })}
-                  placeholder="Tell us about yourself..."
-                  rows={3}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-              >
-                {loading ? 'Saving...' : 'Save Profile'}
-              </button>
-            </form>
           </div>
         )}
 
@@ -322,8 +586,8 @@ export function JobSeekerDashboard() {
             <h2 className="text-2xl font-bold mb-6">My Applications</h2>
             <div className="grid gap-4">
               {applications.map((app) => (
-                <div key={app.id} className="bg-white rounded-lg shadow-sm p-6">
-                  <div className="flex justify-between items-start">
+                <div key={app.id} className="rounded-lg bg-white p-5 shadow-sm sm:p-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex-1">
                       <h3 className="text-xl font-semibold text-gray-900 mb-2">
                         {app.job?.title}
@@ -333,7 +597,7 @@ export function JobSeekerDashboard() {
                         Applied {new Date(app.applied_at).toLocaleDateString()}
                       </p>
                     </div>
-                    <div className="flex items-center">
+                    <div className="flex items-center sm:justify-end">
                       {app.status === 'pending' && (
                         <span className="flex items-center px-4 py-2 bg-yellow-100 text-yellow-700 rounded-full">
                           <Clock className="w-4 h-4 mr-2" />
@@ -366,6 +630,10 @@ export function JobSeekerDashboard() {
 
       {selectedJob && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          {(() => {
+            const skillInsight = getSkillInsight(selectedJob);
+
+            return (
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-200">
               <div className="flex items-start justify-between gap-4">
@@ -412,6 +680,45 @@ export function JobSeekerDashboard() {
                 </p>
               </div>
 
+              {skillInsight.requiredSkills.length > 0 && (
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Skill Gap Suggestions</h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Your profile matches {skillInsight.matchPercentage}% of the identifiable skills in this job post.
+                  </p>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div>
+                      <p className="text-sm font-semibold text-green-700">Matched skills</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {skillInsight.matchedSkills.length > 0 ? (
+                          skillInsight.matchedSkills.map((skill) => (
+                            <span key={skill} className="rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+                              {skill}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-gray-500">No direct matches found yet.</span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-amber-700">Suggested next skills</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {skillInsight.missingSkills.length > 0 ? (
+                          skillInsight.missingSkills.map((skill) => (
+                            <span key={skill} className="rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-700">
+                              {skill}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-gray-500">You already cover the identified core skills.</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-gray-50 rounded-xl p-4">
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">Company Details</h3>
                 <div className="space-y-2 text-gray-700">
@@ -423,19 +730,16 @@ export function JobSeekerDashboard() {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3">
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <button
                   onClick={() => setSelectedJob(null)}
-                  className="px-5 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition"
+                  className="w-full rounded-lg border border-gray-300 px-5 py-2 text-gray-700 transition hover:bg-gray-50 sm:w-auto"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => {
                     handleApply(selectedJob.id);
-                    if (!hasApplied(selectedJob.id)) {
-                      setSelectedJob(null);
-                    }
                   }}
                   disabled={hasApplied(selectedJob.id)}
                   className={`px-5 py-2 rounded-lg font-medium transition ${
@@ -447,6 +751,305 @@ export function JobSeekerDashboard() {
                   {hasApplied(selectedJob.id) ? 'Already Applied' : 'Apply Now'}
                 </button>
               </div>
+            </div>
+          </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {showProfileEditor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+            <div className="border-b border-gray-200 p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    {isProfileComplete ? 'Edit Profile' : 'Complete Your Profile'}
+                  </h2>
+                  <p className="mt-2 text-gray-600">
+                    Save your details once, then recruiters can review them when you apply.
+                  </p>
+                </div>
+                {isProfileComplete && (
+                  <button
+                    onClick={() => setShowProfileEditor(false)}
+                    className="text-sm font-medium text-gray-500 hover:text-gray-700"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <form onSubmit={handleUpdateProfile} className="space-y-4 p-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Skills (comma separated)
+                </label>
+                <input
+                  type="text"
+                  value={profileForm.skills}
+                  onChange={(e) => setProfileForm({ ...profileForm, skills: e.target.value })}
+                  placeholder="e.g., JavaScript, React, Node.js"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Experience
+                </label>
+                <textarea
+                  value={profileForm.experience}
+                  onChange={(e) => setProfileForm({ ...profileForm, experience: e.target.value })}
+                  placeholder="Describe your work experience..."
+                  rows={4}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Phone
+                  </label>
+                  <input
+                    type="tel"
+                    value={profileForm.phone}
+                    onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Location
+                  </label>
+                  <input
+                    type="text"
+                    value={profileForm.location}
+                    onChange={(e) => setProfileForm({ ...profileForm, location: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Bio
+                </label>
+                <textarea
+                  value={profileForm.bio}
+                  onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })}
+                  placeholder="Tell us about yourself..."
+                  rows={3}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 border-t border-gray-200 pt-4 sm:flex-row sm:justify-end">
+                {isProfileComplete && (
+                  <button
+                    type="button"
+                    onClick={() => setShowProfileEditor(false)}
+                    className="w-full rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-700 transition hover:bg-gray-50 sm:w-auto"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full rounded-lg bg-blue-600 px-5 py-2 font-medium text-white transition hover:bg-blue-700 disabled:opacity-50 sm:w-auto"
+                >
+                  {loading ? 'Saving...' : 'Save Profile'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {applicationJob && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-gray-100">
+          <div className="mx-auto min-h-screen max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <button
+                onClick={() => setApplicationJob(null)}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </button>
+              <span className="rounded-full bg-blue-100 px-4 py-1 text-sm font-medium text-blue-700">
+                Applying for {applicationJob.title}
+              </span>
+            </div>
+
+            <div className="rounded-2xl bg-white shadow-sm">
+              <div className="border-b border-gray-200 p-6">
+                <h2 className="text-2xl font-bold text-gray-900">Application Form</h2>
+                <p className="mt-2 text-gray-600">
+                  Share your latest profile details so recruiters can review your application.
+                </p>
+              </div>
+
+              <form onSubmit={handleSubmitApplication} className="space-y-6 p-6">
+                {applicationErrorMessage && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+                    {applicationErrorMessage}
+                  </div>
+                )}
+
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Name</label>
+                    <input
+                      type="text"
+                      value={applicationForm.applicantName}
+                      onChange={(e) => setApplicationForm({ ...applicationForm, applicantName: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Email ID</label>
+                    <input
+                      type="email"
+                      value={applicationForm.applicantEmail}
+                      onChange={(e) => setApplicationForm({ ...applicationForm, applicantEmail: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Skills</label>
+                  <div className="rounded-lg border border-gray-300 px-3 py-3 focus-within:ring-2 focus-within:ring-blue-500">
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {applicationForm.skills.map((skill) => (
+                        <span
+                          key={skill}
+                          className="inline-flex items-center gap-2 rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700"
+                        >
+                          {skill}
+                          <button
+                            type="button"
+                            onClick={() => removeSkillChip(skill)}
+                            className="text-blue-700 hover:text-blue-900"
+                            aria-label={`Remove ${skill}`}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="text"
+                        value={skillInput}
+                        onChange={(e) => setSkillInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault();
+                            addSkillChip();
+                          }
+                        }}
+                        placeholder="Enter Your Skills"
+                        className="flex-1 rounded-lg border border-gray-200 px-3 py-2 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={addSkillChip}
+                        className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-sm text-gray-500">
+                    Example Skills : JavaScript , React , Python , SQL
+                  </p>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-gray-700">Resume Upload</label>
+                  <label className="flex cursor-pointer items-center justify-center gap-3 rounded-xl border border-dashed border-blue-300 bg-blue-50 px-4 py-6 text-blue-700 transition hover:bg-blue-100">
+                    <Upload className="h-5 w-5" />
+                    <span>{applicationForm.resumeFileName || 'Choose resume file'}</span>
+                    <input
+                      type="file"
+                      accept=".pdf,.doc,.docx"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        handleResumeUpload(file);
+                      }}
+                    />
+                  </label>
+                  {applicationForm.resumeDataUrl && (
+                    <p className="mt-2 text-sm text-gray-500">
+                      Resume ready{applicationForm.resumeFileName ? `: ${applicationForm.resumeFileName}` : '.'}
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Reference Option</label>
+                    <select
+                      value={applicationForm.referenceOption}
+                      onChange={(e) =>
+                        setApplicationForm({
+                          ...applicationForm,
+                          referenceOption: e.target.value as typeof applicationForm.referenceOption,
+                        })
+                      }
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      required
+                    >
+                      <option value="available_on_request">Available on request</option>
+                      <option value="attached_in_resume">Attached in resume</option>
+                      <option value="contact_details_provided">Provide contact details below</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Reference Details</label>
+                    <textarea
+                      value={applicationForm.referenceDetails}
+                      onChange={(e) => setApplicationForm({ ...applicationForm, referenceDetails: e.target.value })}
+                      rows={4}
+                      placeholder="Add reference names, relationship, or contact details"
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col-reverse gap-3 border-t border-gray-200 pt-6 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setApplicationJob(null)}
+                    className="w-full rounded-lg border border-gray-300 px-5 py-2 font-medium text-gray-700 transition hover:bg-gray-50 sm:w-auto"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={applying || !applicationForm.resumeDataUrl}
+                    className="w-full rounded-lg bg-blue-600 px-5 py-2 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                  >
+                    {applying ? 'Submitting...' : 'Submit Application'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>
