@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, Job, Application, JobSeekerProfile } from '../lib/supabase';
-import { Search, Briefcase, LogOut, FileText, CheckCircle, XCircle, Clock, ArrowLeft, Upload, X } from 'lucide-react';
+import { Search, Briefcase, LogOut, FileText, CheckCircle, XCircle, Clock, ArrowLeft, Upload, X, Bookmark, CalendarDays, ExternalLink, Building2, Sparkles } from 'lucide-react';
 import { DashboardProfileButton } from './DashboardProfileButton';
 
 const SKILL_KEYWORDS = [
@@ -38,6 +38,96 @@ const SKILL_KEYWORDS = [
   { label: 'Problem Solving', aliases: ['problem solving', 'analytical thinking'] },
 ];
 
+const applicationCategories = [
+  'Software Development',
+  'Design',
+  'Data & Analytics',
+  'Marketing',
+  'Sales',
+  'Human Resources',
+  'Operations',
+  'Customer Support',
+  'Finance',
+  'Other',
+] as const;
+
+const experienceLevels = ['Fresher', 'Junior', 'Mid-Level', 'Senior', 'Lead'] as const;
+const workModes = ['Remote', 'Hybrid', 'On-site', 'Flexible'] as const;
+const noticePeriods = ['Immediate', '15 Days', '30 Days', '60 Days', '90+ Days'] as const;
+const profileCategories = [
+  'Frontend Development',
+  'Backend Development',
+  'Full Stack Development',
+  'UI/UX Design',
+  'Data & Analytics',
+  'Marketing',
+  'Business Operations',
+  'Human Resources',
+  'Finance',
+  'Other',
+] as const;
+const profileCareerLevels = ['Fresher', 'Junior', 'Mid-Level', 'Senior', 'Lead'] as const;
+const profileWorkPreferences = ['Remote', 'Hybrid', 'On-site', 'Flexible'] as const;
+const profileMetaMarker = '[PROFILE_META]';
+
+type ProfileMeta = {
+  category: string;
+  careerLevel: string;
+  preferredWorkMode: string;
+  bioText: string;
+};
+
+const parseProfileMeta = (bio: string | null | undefined): ProfileMeta => {
+  const rawBio = bio || '';
+  const [bioText, metaBlock = ''] = rawBio.split(profileMetaMarker);
+  const metadata = Object.fromEntries(
+    metaBlock
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [key, ...rest] = line.split(':');
+        return [key.trim(), rest.join(':').trim()];
+      })
+  );
+
+  return {
+    category: metadata.Category || 'Frontend Development',
+    careerLevel: metadata['Career Level'] || 'Fresher',
+    preferredWorkMode: metadata['Preferred Work Mode'] || 'Remote',
+    bioText: bioText.trim(),
+  };
+};
+
+const getSavedJobsStorageKey = (userId: string) => `saved_jobs_${userId}`;
+
+const buildProfileBio = (bioText: string, meta: Omit<ProfileMeta, 'bioText'>) =>
+  [
+    bioText.trim(),
+    profileMetaMarker,
+    `Category: ${meta.category}`,
+    `Career Level: ${meta.careerLevel}`,
+    `Preferred Work Mode: ${meta.preferredWorkMode}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+const inferApplicationCategory = (job: Job) => {
+  const content = `${job.title} ${job.description || ''} ${job.requirements || ''}`.toLowerCase();
+
+  if (/developer|engineer|frontend|backend|full stack|software|web/.test(content)) return 'Software Development';
+  if (/designer|ui|ux|figma|graphic/.test(content)) return 'Design';
+  if (/data|analyst|analytics|machine learning|ai/.test(content)) return 'Data & Analytics';
+  if (/marketing|seo|content|brand/.test(content)) return 'Marketing';
+  if (/sales|business development/.test(content)) return 'Sales';
+  if (/hr|human resources|talent|recruit/.test(content)) return 'Human Resources';
+  if (/operations|supply chain|logistics/.test(content)) return 'Operations';
+  if (/support|customer service|success/.test(content)) return 'Customer Support';
+  if (/finance|account|accounting|audit/.test(content)) return 'Finance';
+
+  return 'Other';
+};
+
 type SkillInsight = {
   requiredSkills: string[];
   matchedSkills: string[];
@@ -55,6 +145,12 @@ const normalizeSkill = (value: string) =>
     .trim();
 
 const dedupeSkills = (skills: string[]) => Array.from(new Set(skills));
+
+const splitTextToPoints = (text: string | null | undefined) =>
+  (text || '')
+    .split(/\r?\n|•|-/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 
 const extractSkillsFromText = (text: string) => {
   const normalizedText = normalizeSkill(text);
@@ -118,6 +214,7 @@ export function JobSeekerDashboard() {
   const [applicationSuccessMessage, setApplicationSuccessMessage] = useState('');
   const [applicationErrorMessage, setApplicationErrorMessage] = useState('');
   const [showProfileEditor, setShowProfileEditor] = useState(false);
+  const [savedJobIds, setSavedJobIds] = useState<string[]>([]);
 
   const [profileForm, setProfileForm] = useState({
     skills: '',
@@ -125,6 +222,9 @@ export function JobSeekerDashboard() {
     phone: '',
     location: '',
     bio: '',
+    category: 'Frontend Development',
+    careerLevel: 'Fresher',
+    preferredWorkMode: 'Remote',
   });
 
   const [applicationForm, setApplicationForm] = useState({
@@ -133,6 +233,10 @@ export function JobSeekerDashboard() {
     skills: [] as string[],
     resumeFileName: '',
     resumeDataUrl: '',
+    category: 'Software Development',
+    experienceLevel: 'Fresher',
+    preferredWorkMode: 'Remote',
+    noticePeriod: 'Immediate',
     referenceOption: 'available_on_request' as const,
     referenceDetails: '',
   });
@@ -144,6 +248,27 @@ export function JobSeekerDashboard() {
     loadJobs();
     loadApplications();
     loadProfile();
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!profile?.id) {
+      setSavedJobIds([]);
+      return;
+    }
+
+    const storedValue = window.localStorage.getItem(getSavedJobsStorageKey(profile.id));
+
+    if (!storedValue) {
+      setSavedJobIds([]);
+      return;
+    }
+
+    try {
+      const parsedIds = JSON.parse(storedValue);
+      setSavedJobIds(Array.isArray(parsedIds) ? parsedIds : []);
+    } catch {
+      setSavedJobIds([]);
+    }
   }, [profile?.id]);
 
   const loadJobs = async () => {
@@ -174,13 +299,17 @@ export function JobSeekerDashboard() {
       .maybeSingle();
 
     if (data) {
+      const parsedProfileMeta = parseProfileMeta(data.bio);
       setJobSeekerProfile(data);
       setProfileForm({
         skills: data.skills?.join(', ') || '',
         experience: data.experience || '',
         phone: data.phone || '',
         location: data.location || '',
-        bio: data.bio || '',
+        bio: parsedProfileMeta.bioText || '',
+        category: parsedProfileMeta.category,
+        careerLevel: parsedProfileMeta.careerLevel,
+        preferredWorkMode: parsedProfileMeta.preferredWorkMode,
       });
       setApplicationForm((current) => ({
         ...current,
@@ -206,7 +335,7 @@ export function JobSeekerDashboard() {
       jobSeekerProfile.skills?.length &&
       jobSeekerProfile.phone?.trim() &&
       jobSeekerProfile.location?.trim() &&
-      jobSeekerProfile.bio?.trim()
+      parseProfileMeta(jobSeekerProfile.bio).bioText.trim()
     );
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
@@ -222,7 +351,11 @@ export function JobSeekerDashboard() {
         experience: profileForm.experience,
         phone: profileForm.phone,
         location: profileForm.location,
-        bio: profileForm.bio,
+        bio: buildProfileBio(profileForm.bio, {
+          category: profileForm.category,
+          careerLevel: profileForm.careerLevel,
+          preferredWorkMode: profileForm.preferredWorkMode,
+        }),
         updated_at: new Date().toISOString(),
       })
       .eq('user_id', profile?.id);
@@ -257,6 +390,9 @@ export function JobSeekerDashboard() {
       skills: profileForm.skills.split(',').map((skill) => skill.trim()).filter(Boolean),
       resumeDataUrl: jobSeekerProfile?.resume_url || current.resumeDataUrl,
       resumeFileName: current.resumeFileName,
+      category: inferApplicationCategory(job),
+      preferredWorkMode:
+        job.location?.toLowerCase().includes('remote') ? 'Remote' : current.preferredWorkMode,
     }));
   };
 
@@ -306,6 +442,17 @@ export function JobSeekerDashboard() {
     setApplicationSuccessMessage('');
     setApplicationErrorMessage('');
     const skillsArray = applicationForm.skills;
+    const extraApplicationDetails = [
+      `Application Category: ${applicationForm.category}`,
+      `Experience Level: ${applicationForm.experienceLevel}`,
+      `Preferred Work Mode: ${applicationForm.preferredWorkMode}`,
+      `Notice Period: ${applicationForm.noticePeriod}`,
+      applicationForm.referenceDetails.trim()
+        ? `Additional Notes: ${applicationForm.referenceDetails.trim()}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const { error } = await supabase.from('applications').insert({
       job_id: applicationJob.id,
@@ -317,7 +464,7 @@ export function JobSeekerDashboard() {
       resume_file_name: applicationForm.resumeFileName,
       resume_data_url: applicationForm.resumeDataUrl,
       reference_option: applicationForm.referenceOption,
-      reference_details: applicationForm.referenceDetails,
+      reference_details: extraApplicationDetails,
     });
 
     if (!error) {
@@ -352,6 +499,23 @@ export function JobSeekerDashboard() {
   };
 
   const hasApplied = (jobId: string) => applications.some(app => app.job_id === jobId);
+  const isJobSaved = (jobId: string) => savedJobIds.includes(jobId);
+  const handleToggleSaveJob = (jobId: string) => {
+    if (!profile?.id) return;
+
+    setSavedJobIds((current) => {
+      const nextSavedJobIds = current.includes(jobId)
+        ? current.filter((id) => id !== jobId)
+        : [jobId, ...current];
+
+      window.localStorage.setItem(
+        getSavedJobsStorageKey(profile.id),
+        JSON.stringify(nextSavedJobIds)
+      );
+
+      return nextSavedJobIds;
+    });
+  };
   const profileSkills = jobSeekerProfile?.skills || profileForm.skills.split(',').map((skill) => skill.trim()).filter(Boolean);
   const getSkillInsight = (job: Job) => buildSkillInsight(job, profileSkills);
   const locations = Array.from(new Set(jobs.map((job) => job.location).filter(Boolean))).sort();
@@ -370,6 +534,30 @@ export function JobSeekerDashboard() {
 
     return matchesSearch && matchesJobType && matchesLocation && matchesApplication;
   });
+  const recommendedJobs = jobs
+    .filter((job) => !hasApplied(job.id))
+    .map((job) => {
+      const skillInsight = getSkillInsight(job);
+      const fallbackScore = skillInsight.requiredSkills.length === 0 ? 15 : 0;
+
+      return {
+        job,
+        skillInsight,
+        recommendationScore: skillInsight.matchPercentage + fallbackScore,
+      };
+    })
+    .sort((left, right) => right.recommendationScore - left.recommendationScore)
+    .slice(0, 3);
+  const savedJobs = savedJobIds
+    .map((jobId) => jobs.find((job) => job.id === jobId))
+    .filter((job): job is Job => Boolean(job));
+
+  const handleLogout = async () => {
+    const shouldLogout = window.confirm('Are you sure you want to log out?');
+    if (!shouldLogout) return;
+
+    await signOut();
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -389,7 +577,7 @@ export function JobSeekerDashboard() {
                 onEdit={() => setShowProfileEditor(true)}
               />
               <button
-                onClick={() => signOut()}
+                onClick={handleLogout}
                 className="flex items-center text-gray-600 hover:text-gray-900"
               >
                 <LogOut className="w-5 h-5" />
@@ -491,6 +679,166 @@ export function JobSeekerDashboard() {
               </div>
             </div>
 
+            <div className="mb-6 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 p-5 text-white shadow-sm sm:p-6">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-100">
+                    Recommended For You
+                  </p>
+                  <h2 className="mt-1 text-2xl font-bold">Best-fit jobs based on your profile</h2>
+                  <p className="mt-2 max-w-2xl text-sm text-blue-100">
+                    Recommendations use your saved skills and application activity to surface the strongest opportunities first.
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-white/10 px-4 py-3 text-sm text-blue-50">
+                  {recommendedJobs.length} suggested role{recommendedJobs.length === 1 ? '' : 's'}
+                </div>
+              </div>
+
+              {recommendedJobs.length > 0 ? (
+                <div className="mt-5 grid gap-4 lg:grid-cols-3">
+                  {recommendedJobs.map(({ job, skillInsight, recommendationScore }) => (
+                    <div key={job.id} className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm ring-1 ring-white/15">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-semibold">{job.title}</h3>
+                          <p className="mt-1 text-sm text-blue-100">{job.company?.name || 'Company not listed'}</p>
+                        </div>
+                        <span className="rounded-full bg-emerald-400/20 px-3 py-1 text-xs font-semibold text-emerald-100">
+                          {recommendationScore}% fit
+                        </span>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                        <span className="rounded-full bg-white/15 px-3 py-1">{job.job_type}</span>
+                        <span className="rounded-full bg-white/15 px-3 py-1">{job.location}</span>
+                        {job.salary_range && (
+                          <span className="rounded-full bg-white/15 px-3 py-1">{job.salary_range}</span>
+                        )}
+                      </div>
+
+                      <p className="mt-4 line-clamp-3 text-sm text-blue-50">
+                        {job.description}
+                      </p>
+
+                      <div className="mt-4 text-sm text-blue-100">
+                        {skillInsight.requiredSkills.length > 0 ? (
+                          <span>
+                            Matches {skillInsight.matchedSkills.length} of {skillInsight.requiredSkills.length} identified skills.
+                          </span>
+                        ) : (
+                          <span>Recommended from your recent activity and active openings.</span>
+                        )}
+                      </div>
+
+                      <div className="mt-4 flex gap-3">
+                        <button
+                          onClick={() => setSelectedJob(job)}
+                          className="flex-1 rounded-xl bg-white px-4 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-50"
+                        >
+                          View Details
+                        </button>
+                        <button
+                          onClick={() => handleToggleSaveJob(job.id)}
+                          className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                            isJobSaved(job.id)
+                              ? 'bg-amber-400 text-slate-900 hover:bg-amber-300'
+                              : 'bg-white/15 text-white hover:bg-white/25'
+                          }`}
+                        >
+                          {isJobSaved(job.id) ? 'Saved' : 'Save'}
+                        </button>
+                        <button
+                          onClick={() => handleApply(job.id)}
+                          className="flex-1 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-600"
+                        >
+                          Quick Apply
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-5 rounded-2xl bg-white/10 px-4 py-4 text-sm text-blue-50 ring-1 ring-white/15">
+                  No recommendations yet. Add more profile skills or explore jobs to improve matching.
+                </div>
+              )}
+            </div>
+
+            <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-blue-700">
+                    <Bookmark className="h-5 w-5" />
+                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-600">Saved Jobs</p>
+                  </div>
+                  <h2 className="mt-1 text-2xl font-bold text-gray-900">Your shortlist</h2>
+                  <p className="mt-2 text-sm text-gray-600">
+                    Save interesting roles here so you can come back and apply when you're ready.
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">
+                  {savedJobs.length} saved job{savedJobs.length === 1 ? '' : 's'}
+                </div>
+              </div>
+
+              {savedJobs.length > 0 ? (
+                <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                  {savedJobs.map((job) => (
+                    <div key={job.id} className="rounded-2xl border border-gray-200 p-4 transition hover:border-blue-200 hover:shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-semibold text-gray-900">{job.title}</h3>
+                          <p className="mt-1 text-sm text-gray-600">{job.company?.name || 'Company not listed'}</p>
+                        </div>
+                        <button
+                          onClick={() => handleToggleSaveJob(job.id)}
+                          className="rounded-full bg-amber-100 p-2 text-amber-700 transition hover:bg-amber-200"
+                          aria-label={`Remove ${job.title} from saved jobs`}
+                        >
+                          <Bookmark className="h-4 w-4 fill-current" />
+                        </button>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <span className="rounded-full bg-blue-100 px-3 py-1 text-sm text-blue-700">{job.job_type}</span>
+                        <span className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">{job.location}</span>
+                        {job.salary_range && (
+                          <span className="rounded-full bg-green-100 px-3 py-1 text-sm text-green-700">{job.salary_range}</span>
+                        )}
+                      </div>
+
+                      <p className="mt-4 line-clamp-3 text-sm text-gray-700">{job.description}</p>
+
+                      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                        <button
+                          onClick={() => setSelectedJob(job)}
+                          className="w-full rounded-lg border border-blue-600 px-4 py-2 font-medium text-blue-600 transition hover:bg-blue-50"
+                        >
+                          View Details
+                        </button>
+                        <button
+                          onClick={() => handleApply(job.id)}
+                          disabled={hasApplied(job.id)}
+                          className={`w-full rounded-lg px-4 py-2 font-medium transition ${
+                            hasApplied(job.id)
+                              ? 'cursor-not-allowed bg-gray-300 text-gray-600'
+                              : 'bg-blue-600 text-white hover:bg-blue-700'
+                          }`}
+                        >
+                          {hasApplied(job.id) ? 'Applied' : 'Apply'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-5 rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+                  No saved jobs yet. Use the Save button on any job card to build your shortlist.
+                </div>
+              )}
+            </div>
+
             <div className="grid gap-4">
               {filteredJobs.map((job) => {
                 const skillInsight = getSkillInsight(job);
@@ -553,6 +901,16 @@ export function JobSeekerDashboard() {
                       )}
                     </div>
                     <div className="flex flex-col gap-3 sm:flex-row lg:min-w-[220px] lg:flex-col">
+                      <button
+                        onClick={() => handleToggleSaveJob(job.id)}
+                        className={`w-full rounded-lg border px-6 py-2 font-medium transition ${
+                          isJobSaved(job.id)
+                            ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        {isJobSaved(job.id) ? 'Saved' : 'Save Job'}
+                      </button>
                       <button
                         onClick={() => setSelectedJob(job)}
                         className="w-full rounded-lg border border-blue-600 px-6 py-2 font-medium text-blue-600 transition hover:bg-blue-50"
@@ -632,6 +990,10 @@ export function JobSeekerDashboard() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           {(() => {
             const skillInsight = getSkillInsight(selectedJob);
+            const requirementPoints = splitTextToPoints(selectedJob.requirements);
+            const descriptionPoints = splitTextToPoints(selectedJob.description).slice(0, 4);
+            const postedDate = new Date(selectedJob.created_at).toLocaleDateString();
+            const applicationState = hasApplied(selectedJob.id) ? 'Already applied' : 'Open for application';
 
             return (
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -643,14 +1005,41 @@ export function JobSeekerDashboard() {
                 </div>
                 <button
                   onClick={() => setSelectedJob(null)}
-                  className="text-gray-500 hover:text-gray-700 text-sm font-medium"
+                  className="rounded-full p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
+                  aria-label="Close job details"
                 >
-                  Close
+                  <X className="h-5 w-5" />
                 </button>
               </div>
             </div>
 
             <div className="p-6 space-y-6">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                  <div className="flex items-center gap-2 text-blue-700">
+                    <CalendarDays className="h-4 w-4" />
+                    <span className="text-sm font-semibold">Posted on</span>
+                  </div>
+                  <p className="mt-2 text-sm text-blue-900">{postedDate}</p>
+                </div>
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                  <div className="flex items-center gap-2 text-emerald-700">
+                    <Sparkles className="h-4 w-4" />
+                    <span className="text-sm font-semibold">Match score</span>
+                  </div>
+                  <p className="mt-2 text-sm text-emerald-900">
+                    {skillInsight.requiredSkills.length > 0 ? `${skillInsight.matchPercentage}% based on detected skills` : 'Profile-based recommendation available'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
+                  <div className="flex items-center gap-2 text-amber-700">
+                    <CheckCircle className="h-4 w-4" />
+                    <span className="text-sm font-semibold">Application</span>
+                  </div>
+                  <p className="mt-2 text-sm text-amber-900">{applicationState}</p>
+                </div>
+              </div>
+
               <div className="flex flex-wrap gap-2">
                 <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm">
                   {selectedJob.job_type}
@@ -668,6 +1057,20 @@ export function JobSeekerDashboard() {
                 </span>
               </div>
 
+              {descriptionPoints.length > 0 && (
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Role Highlights</h3>
+                  <div className="grid gap-2">
+                    {descriptionPoints.map((point, index) => (
+                      <div key={`${point}-${index}`} className="flex gap-3 text-sm text-gray-700">
+                        <span className="mt-1 h-2 w-2 rounded-full bg-blue-500" />
+                        <span>{point}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">Job Description</h3>
                 <p className="text-gray-700 whitespace-pre-line">{selectedJob.description}</p>
@@ -675,10 +1078,32 @@ export function JobSeekerDashboard() {
 
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">Requirements</h3>
-                <p className="text-gray-700 whitespace-pre-line">
-                  {selectedJob.requirements || 'No specific requirements provided.'}
-                </p>
+                {requirementPoints.length > 0 ? (
+                  <div className="space-y-2">
+                    {requirementPoints.map((point, index) => (
+                      <div key={`${point}-${index}`} className="flex gap-3 text-gray-700">
+                        <span className="mt-2 h-2 w-2 rounded-full bg-blue-500" />
+                        <span>{point}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-gray-700">No specific requirements provided.</p>
+                )}
               </div>
+
+              {skillInsight.requiredSkills.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Key Skills Identified</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {skillInsight.requiredSkills.map((skill) => (
+                      <span key={skill} className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {skillInsight.requiredSkills.length > 0 && (
                 <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
@@ -719,14 +1144,47 @@ export function JobSeekerDashboard() {
                 </div>
               )}
 
-              <div className="bg-gray-50 rounded-xl p-4">
-                <h3 className="text-lg font-semibold text-gray-900 mb-3">Company Details</h3>
-                <div className="space-y-2 text-gray-700">
-                  <p><span className="font-medium">Company:</span> {selectedJob.company?.name || 'N/A'}</p>
-                  <p><span className="font-medium">Industry:</span> {selectedJob.company?.industry || 'N/A'}</p>
-                  <p><span className="font-medium">Location:</span> {selectedJob.company?.location || selectedJob.location}</p>
-                  <p><span className="font-medium">Website:</span> {selectedJob.company?.website || 'N/A'}</p>
-                  <p><span className="font-medium">About:</span> {selectedJob.company?.description || 'No company description provided.'}</p>
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Company Details</h3>
+                  <div className="space-y-2 text-gray-700">
+                    <p><span className="font-medium">Company:</span> {selectedJob.company?.name || 'N/A'}</p>
+                    <p><span className="font-medium">Industry:</span> {selectedJob.company?.industry || 'N/A'}</p>
+                    <p><span className="font-medium">Location:</span> {selectedJob.company?.location || selectedJob.location}</p>
+                    <p>
+                      <span className="font-medium">Website:</span>{' '}
+                      {selectedJob.company?.website ? (
+                        <a
+                          href={selectedJob.company.website}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                        >
+                          Visit site
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      ) : (
+                        'N/A'
+                      )}
+                    </p>
+                    <p><span className="font-medium">About:</span> {selectedJob.company?.description || 'No company description provided.'}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="flex items-center gap-2 text-slate-800">
+                    <Building2 className="h-4 w-4" />
+                    <h3 className="text-lg font-semibold">Before You Apply</h3>
+                  </div>
+                  <div className="mt-4 space-y-3 text-sm text-slate-600">
+                    <p>Check that your profile skills reflect this role's main requirements.</p>
+                    <p>Keep your resume updated so recruiters see your latest experience.</p>
+                    <p>
+                      {hasApplied(selectedJob.id)
+                        ? 'You have already applied for this job, so you can track the result in My Applications.'
+                        : 'If this role fits your goals, you can apply directly from this popup.'}
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -736,6 +1194,16 @@ export function JobSeekerDashboard() {
                   className="w-full rounded-lg border border-gray-300 px-5 py-2 text-gray-700 transition hover:bg-gray-50 sm:w-auto"
                 >
                   Cancel
+                </button>
+                <button
+                  onClick={() => handleToggleSaveJob(selectedJob.id)}
+                  className={`w-full rounded-lg px-5 py-2 font-medium transition sm:w-auto ${
+                    isJobSaved(selectedJob.id)
+                      ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                      : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {isJobSaved(selectedJob.id) ? 'Saved Job' : 'Save Job'}
                 </button>
                 <button
                   onClick={() => {
@@ -771,18 +1239,79 @@ export function JobSeekerDashboard() {
                     Save your details once, then recruiters can review them when you apply.
                   </p>
                 </div>
-                {isProfileComplete && (
-                  <button
-                    onClick={() => setShowProfileEditor(false)}
-                    className="text-sm font-medium text-gray-500 hover:text-gray-700"
-                  >
-                    Close
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setShowProfileEditor(false)}
+                  className="rounded-full p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
+                  aria-label="Close profile editor"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
             </div>
 
             <form onSubmit={handleUpdateProfile} className="space-y-4 p-6">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Category
+                  </label>
+                  <select
+                    value={profileForm.category}
+                    onChange={(e) => setProfileForm({ ...profileForm, category: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  >
+                    {profileCategories.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Career Level
+                  </label>
+                  <select
+                    value={profileForm.careerLevel}
+                    onChange={(e) => setProfileForm({ ...profileForm, careerLevel: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  >
+                    {profileCareerLevels.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Preferred Work Mode
+                  </label>
+                  <select
+                    value={profileForm.preferredWorkMode}
+                    onChange={(e) => setProfileForm({ ...profileForm, preferredWorkMode: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  >
+                    {profileWorkPreferences.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                <span className="font-semibold">Profile summary:</span>{' '}
+                {profileForm.category}, {profileForm.careerLevel}, prefers {profileForm.preferredWorkMode}.
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Skills (comma separated)
@@ -930,6 +1459,40 @@ export function JobSeekerDashboard() {
                   </div>
                 </div>
 
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Application Category</label>
+                    <select
+                      value={applicationForm.category}
+                      onChange={(e) => setApplicationForm({ ...applicationForm, category: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      required
+                    >
+                      {applicationCategories.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Experience Level</label>
+                    <select
+                      value={applicationForm.experienceLevel}
+                      onChange={(e) => setApplicationForm({ ...applicationForm, experienceLevel: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      required
+                    >
+                      {experienceLevels.map((level) => (
+                        <option key={level} value={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700">Skills</label>
                   <div className="rounded-lg border border-gray-300 px-3 py-3 focus-within:ring-2 focus-within:ring-blue-500">
@@ -979,6 +1542,45 @@ export function JobSeekerDashboard() {
                   </p>
                 </div>
 
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Preferred Work Mode</label>
+                    <select
+                      value={applicationForm.preferredWorkMode}
+                      onChange={(e) => setApplicationForm({ ...applicationForm, preferredWorkMode: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      required
+                    >
+                      {workModes.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {mode}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Notice Period</label>
+                    <select
+                      value={applicationForm.noticePeriod}
+                      onChange={(e) => setApplicationForm({ ...applicationForm, noticePeriod: e.target.value })}
+                      className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      required
+                    >
+                      {noticePeriods.map((period) => (
+                        <option key={period} value={period}>
+                          {period}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                  <span className="font-semibold">Application summary:</span>{' '}
+                  {applicationForm.category}, {applicationForm.experienceLevel}, {applicationForm.preferredWorkMode}, notice period {applicationForm.noticePeriod}.
+                </div>
+
                 <div>
                   <label className="mb-2 block text-sm font-medium text-gray-700">Resume Upload</label>
                   <label className="flex cursor-pointer items-center justify-center gap-3 rounded-xl border border-dashed border-blue-300 bg-blue-50 px-4 py-6 text-blue-700 transition hover:bg-blue-100">
@@ -1022,12 +1624,12 @@ export function JobSeekerDashboard() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Reference Details</label>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Additional Notes</label>
                     <textarea
                       value={applicationForm.referenceDetails}
                       onChange={(e) => setApplicationForm({ ...applicationForm, referenceDetails: e.target.value })}
                       rows={4}
-                      placeholder="Add reference names, relationship, or contact details"
+                      placeholder="Add reference names, relationship, contact details, or any extra notes"
                       className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
                     />
                   </div>

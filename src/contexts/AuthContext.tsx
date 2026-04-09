@@ -6,8 +6,16 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
-  signUp: (email: string, password: string, fullName: string, role: string) => Promise<void>;
+  isRecoveryMode: boolean;
+  signUp: (
+    email: string,
+    password: string,
+    fullName: string,
+    role: string
+  ) => Promise<{ requiresEmailConfirmation: boolean }>;
   signIn: (email: string, password: string) => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
+  updatePassword: (password: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -17,6 +25,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isRecoveryMode, setIsRecoveryMode] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -28,8 +37,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       (() => {
+        setIsRecoveryMode(event === 'PASSWORD_RECOVERY');
         setUser(session?.user ?? null);
         if (session?.user) {
           loadProfile(session.user.id);
@@ -65,13 +75,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
 
     if (data.user) {
+      const nextProfile: UserProfile = {
+        id: data.user.id,
+        email,
+        full_name: fullName,
+        role: role as UserProfile['role'],
+        created_at: data.user.created_at || new Date().toISOString(),
+        updated_at: data.user.updated_at || new Date().toISOString(),
+      };
+
       const { error: profileError } = await supabase
         .from('user_profiles')
         .insert({
-          id: data.user.id,
-          email,
-          full_name: fullName,
-          role,
+          id: nextProfile.id,
+          email: nextProfile.email,
+          full_name: nextProfile.full_name,
+          role: nextProfile.role,
         });
 
       if (profileError) throw profileError;
@@ -83,7 +102,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             user_id: data.user.id,
           });
       }
+
+      if (data.session) {
+        setUser(data.user);
+        setProfile(nextProfile);
+      }
     }
+
+    return {
+      requiresEmailConfirmation: !data.session,
+    };
   };
 
   const signIn = async (email: string, password: string) => {
@@ -95,13 +123,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   };
 
+  const resetPassword = async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+
+    if (error) throw error;
+  };
+
+  const updatePassword = async (password: string) => {
+    const { error } = await supabase.auth.updateUser({
+      password,
+    });
+
+    if (error) throw error;
+
+    setIsRecoveryMode(false);
+  };
+
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signUp, signIn, signOut }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        profile,
+        loading,
+        isRecoveryMode,
+        signUp,
+        signIn,
+        resetPassword,
+        updatePassword,
+        signOut,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

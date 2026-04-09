@@ -5,7 +5,7 @@ import { RecruiterDashboard } from './components/RecruiterDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 
 function AppContent() {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, isRecoveryMode } = useAuth();
 
   if (loading) {
     return (
@@ -18,7 +18,7 @@ function AppContent() {
     );
   }
 
-  if (!user || !profile) {
+  if (isRecoveryMode || !user || !profile) {
     return <Auth />;
   }
 

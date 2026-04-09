@@ -16,6 +16,28 @@ const roleLabels: Record<string, string> = {
   job_seeker: 'Job Seeker',
 };
 
+const parseProfileMeta = (bio: string | null | undefined) => {
+  const rawBio = bio || '';
+  const [bioText, metaBlock = ''] = rawBio.split('[PROFILE_META]');
+  const metadata = Object.fromEntries(
+    metaBlock
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [key, ...rest] = line.split(':');
+        return [key.trim(), rest.join(':').trim()];
+      })
+  );
+
+  return {
+    bioText: bioText.trim(),
+    category: metadata.Category || 'Not added yet',
+    careerLevel: metadata['Career Level'] || 'Not added yet',
+    preferredWorkMode: metadata['Preferred Work Mode'] || 'Not added yet',
+  };
+};
+
 export function DashboardProfileButton({
   profile,
   accentColorClass,
@@ -24,6 +46,7 @@ export function DashboardProfileButton({
   onEdit,
 }: DashboardProfileButtonProps) {
   const [open, setOpen] = useState(false);
+  const parsedProfileMeta = extraProfile ? parseProfileMeta(extraProfile.bio) : null;
 
   return (
     <>
@@ -73,6 +96,20 @@ export function DashboardProfileButton({
 
               {extraProfile && (
                 <>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="rounded-xl bg-gray-50 p-4">
+                      <p className="text-gray-500">Category</p>
+                      <p className="mt-1 font-medium text-gray-900">{parsedProfileMeta?.category}</p>
+                    </div>
+                    <div className="rounded-xl bg-gray-50 p-4">
+                      <p className="text-gray-500">Career Level</p>
+                      <p className="mt-1 font-medium text-gray-900">{parsedProfileMeta?.careerLevel}</p>
+                    </div>
+                    <div className="rounded-xl bg-gray-50 p-4">
+                      <p className="text-gray-500">Work Preference</p>
+                      <p className="mt-1 font-medium text-gray-900">{parsedProfileMeta?.preferredWorkMode}</p>
+                    </div>
+                  </div>
                   <div className="rounded-xl bg-gray-50 p-4">
                     <p className="text-gray-500">Skills</p>
                     <p className="mt-1 font-medium text-gray-900">
@@ -92,7 +129,7 @@ export function DashboardProfileButton({
                   <div className="rounded-xl bg-gray-50 p-4">
                     <p className="text-gray-500">Bio</p>
                     <p className="mt-1 whitespace-pre-line font-medium text-gray-900">
-                      {extraProfile.bio || 'Not added yet'}
+                      {parsedProfileMeta?.bioText || 'Not added yet'}
                     </p>
                   </div>
                 </>

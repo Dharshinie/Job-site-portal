@@ -184,6 +184,13 @@ export function RecruiterDashboard() {
     }
   };
 
+  const handleLogout = async () => {
+    const shouldLogout = window.confirm('Are you sure you want to log out?');
+    if (!shouldLogout) return;
+
+    await signOut();
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <nav className="bg-white shadow-sm">
@@ -201,7 +208,7 @@ export function RecruiterDashboard() {
                 companyName={company?.name}
               />
               <button
-                onClick={() => signOut()}
+                onClick={handleLogout}
                 className="flex items-center text-gray-600 hover:text-gray-900"
               >
                 <LogOut className="w-5 h-5" />
