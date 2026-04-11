@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, Job, Application, JobSeekerProfile } from '../lib/supabase';
 import { Search, Briefcase, LogOut, FileText, CheckCircle, XCircle, Clock, ArrowLeft, Upload, X, Bookmark, CalendarDays, ExternalLink, Building2, Sparkles } from 'lucide-react';
 import { DashboardProfileButton } from './DashboardProfileButton';
+import { SavedJobsPage } from './SavedJobsPage.tsx';
 
 const SKILL_KEYWORDS = [
   { label: 'JavaScript', aliases: ['javascript', 'js'] },
@@ -199,7 +200,6 @@ const buildSkillInsight = (job: Job, userSkills: string[]): SkillInsight => {
 
 export function JobSeekerDashboard() {
   const { profile, signOut } = useAuth();
-  const [activeTab, setActiveTab] = useState<'search' | 'applications'>('search');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
@@ -215,6 +215,7 @@ export function JobSeekerDashboard() {
   const [applicationErrorMessage, setApplicationErrorMessage] = useState('');
   const [showProfileEditor, setShowProfileEditor] = useState(false);
   const [savedJobIds, setSavedJobIds] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<'search' | 'applications' | 'saved'>('search');
 
   const [profileForm, setProfileForm] = useState({
     skills: '',
@@ -241,6 +242,7 @@ export function JobSeekerDashboard() {
     referenceDetails: '',
   });
   const [skillInput, setSkillInput] = useState('');
+  const [resumePreview, setResumePreview] = useState('');
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -356,6 +358,9 @@ export function JobSeekerDashboard() {
           careerLevel: profileForm.careerLevel,
           preferredWorkMode: profileForm.preferredWorkMode,
         }),
+        resume_url: resumePreview
+          ? `data:text/plain;charset=utf-8,${encodeURIComponent(resumePreview)}`
+          : jobSeekerProfile?.resume_url || '',
         updated_at: new Date().toISOString(),
       })
       .eq('user_id', profile?.id);
@@ -432,6 +437,56 @@ export function JobSeekerDashboard() {
       resumeFileName: file.name,
       resumeDataUrl,
     }));
+  };
+
+  const buildResumeText = () => {
+    const skills = profileForm.skills
+      .split(',')
+      .map((skill) => skill.trim())
+      .filter(Boolean);
+
+    return [
+      profile?.full_name || 'Name',
+      profile?.email || 'Email',
+      `${profileForm.category} | ${profileForm.careerLevel} | ${profileForm.preferredWorkMode}`,
+      `${profileForm.location}${profileForm.location && profileForm.phone ? ' | ' : ''}${profileForm.phone}`,
+      '',
+      'Professional Summary',
+      profileForm.bio,
+      '',
+      'Experience',
+      profileForm.experience,
+      '',
+      'Skills',
+      skills.length ? skills.join(', ') : 'Not specified',
+      '',
+      'Generated from Job Portal profile',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  };
+
+  const generateResume = () => {
+    const resumeText = buildResumeText();
+    setResumePreview(resumeText);
+    setApplicationForm((current) => ({
+      ...current,
+      resumeFileName: 'generated-resume.txt',
+      resumeDataUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(resumeText)}`,
+    }));
+  };
+
+  const downloadResume = () => {
+    const resumeText = resumePreview || buildResumeText();
+    const blob = new Blob([resumeText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'resume.txt';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   };
 
   const handleSubmitApplication = async (e: React.FormEvent) => {
@@ -569,7 +624,15 @@ export function JobSeekerDashboard() {
               <h1 className="text-xl font-bold text-gray-900">JobPortal</h1>
             </div>
             <div className="flex items-center justify-end gap-3 sm:gap-4">
+              <button
+                type="button"
+                onClick={() => setActiveTab('saved')}
+                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                <Bookmark className="w-4 h-4" />
               
+              </button>
+
               <DashboardProfileButton
                 profile={profile}
                 accentColorClass="text-blue-600"
@@ -764,81 +827,6 @@ export function JobSeekerDashboard() {
                 </div>
               )}
             </div>
-
-            <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm sm:p-6">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="flex items-center gap-2 text-blue-700">
-                    <Bookmark className="h-5 w-5" />
-                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-600">Saved Jobs</p>
-                  </div>
-                  <h2 className="mt-1 text-2xl font-bold text-gray-900">Your shortlist</h2>
-                  <p className="mt-2 text-sm text-gray-600">
-                    Save interesting roles here so you can come back and apply when you're ready.
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">
-                  {savedJobs.length} saved job{savedJobs.length === 1 ? '' : 's'}
-                </div>
-              </div>
-
-              {savedJobs.length > 0 ? (
-                <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                  {savedJobs.map((job) => (
-                    <div key={job.id} className="rounded-2xl border border-gray-200 p-4 transition hover:border-blue-200 hover:shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-lg font-semibold text-gray-900">{job.title}</h3>
-                          <p className="mt-1 text-sm text-gray-600">{job.company?.name || 'Company not listed'}</p>
-                        </div>
-                        <button
-                          onClick={() => handleToggleSaveJob(job.id)}
-                          className="rounded-full bg-amber-100 p-2 text-amber-700 transition hover:bg-amber-200"
-                          aria-label={`Remove ${job.title} from saved jobs`}
-                        >
-                          <Bookmark className="h-4 w-4 fill-current" />
-                        </button>
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <span className="rounded-full bg-blue-100 px-3 py-1 text-sm text-blue-700">{job.job_type}</span>
-                        <span className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">{job.location}</span>
-                        {job.salary_range && (
-                          <span className="rounded-full bg-green-100 px-3 py-1 text-sm text-green-700">{job.salary_range}</span>
-                        )}
-                      </div>
-
-                      <p className="mt-4 line-clamp-3 text-sm text-gray-700">{job.description}</p>
-
-                      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                        <button
-                          onClick={() => setSelectedJob(job)}
-                          className="w-full rounded-lg border border-blue-600 px-4 py-2 font-medium text-blue-600 transition hover:bg-blue-50"
-                        >
-                          View Details
-                        </button>
-                        <button
-                          onClick={() => handleApply(job.id)}
-                          disabled={hasApplied(job.id)}
-                          className={`w-full rounded-lg px-4 py-2 font-medium transition ${
-                            hasApplied(job.id)
-                              ? 'cursor-not-allowed bg-gray-300 text-gray-600'
-                              : 'bg-blue-600 text-white hover:bg-blue-700'
-                          }`}
-                        >
-                          {hasApplied(job.id) ? 'Applied' : 'Apply'}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="mt-5 rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
-                  No saved jobs yet. Use the Save button on any job card to build your shortlist.
-                </div>
-              )}
-            </div>
-
             <div className="grid gap-4">
               {filteredJobs.map((job) => {
                 const skillInsight = getSkillInsight(job);
@@ -931,12 +919,24 @@ export function JobSeekerDashboard() {
                     </div>
                   </div>
                 </div>
-              )})}
+              );
+            })}
               {filteredJobs.length === 0 && (
                 <p className="text-center text-gray-500 py-8">No jobs found for your search.</p>
               )}
             </div>
           </div>
+        )}
+
+        {activeTab === 'saved' && (
+          <SavedJobsPage
+            savedJobs={savedJobs}
+            hasApplied={hasApplied}
+            handleToggleSaveJob={handleToggleSaveJob}
+            handleApply={handleApply}
+            setSelectedJob={setSelectedJob}
+            onBack={() => setActiveTab('search')}
+          />
         )}
 
         {activeTab === 'applications' && (
@@ -1379,6 +1379,46 @@ export function JobSeekerDashboard() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   required
                 />
+              </div>
+
+              <div className="rounded-3xl border border-dashed border-gray-300 bg-gray-50 p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Resume Maker</p>
+                    <p className="mt-1 text-sm text-gray-500">
+                      Generate a simple resume from your profile details and download it instantly.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={generateResume}
+                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+                    >
+                      Generate Resume
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadResume}
+                      disabled={!resumePreview}
+                      className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Download
+                    </button>
+                  </div>
+                </div>
+                {resumePreview ? (
+                  <textarea
+                    readOnly
+                    value={resumePreview}
+                    rows={10}
+                    className="mt-4 w-full rounded-xl border border-gray-200 bg-white p-3 text-sm text-gray-700"
+                  />
+                ) : (
+                  <p className="mt-4 text-sm text-gray-500">
+                    Click "Generate Resume" to preview a generated resume from your profile.
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col-reverse gap-3 border-t border-gray-200 pt-4 sm:flex-row sm:justify-end">
